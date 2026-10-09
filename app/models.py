@@ -1,63 +1,39 @@
-"""Data models used to validate API input and output."""
+from pydantic import BaseModel, ConfigDict, Field
 
-from pydantic import BaseModel, Field
+class CategoryInput(BaseModel):
 
+    #extra="forbid" used if the users sends a field thats type or random then returns 422
+    # the other one is self explanatory
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-class StudentInput(BaseModel):
-    """Fields students can send when creating or updating a record."""
+    name: str = Field(min_length=1, max_length=100)
 
-    name: str = Field(min_length=1)
-    age: int = Field(ge=0)
+    description: str | None = Field(default=None, max_length=500)
 
-    @staticmethod
-    def list_students(database_connection):
-        with database_connection() as connection:
-            rows = connection.execute(
-                "SELECT id, name, age FROM students ORDER BY id"
-            ).fetchall()
-        return [rows]
+#inherits categoryInput, this one will be sent back to the users
+#Basically category as returned by the api
+class Category(CategoryInput):
 
-    @staticmethod
-    def create_student(student_input, database_connection):
-        with database_connection() as connection:
-            cursor = connection.execute(
-                "INSERT INTO students (name, age) VALUES (?, ?)",
-                (student_input.name, student_input.age),
-            )
-            row = connection.execute(
-                "SELECT id, name, age FROM students WHERE id = ?", (cursor.lastrowid,)
-            ).fetchone()
-        return row
+    #plain int, no rules. No clients should be able to send this field
+    id: int
 
-    @staticmethod
-    def get_student(student_id, database_connection):
-        with database_connection() as connection:
-            row = connection.execute(
-                "SELECT id, name, age FROM students WHERE id = ?", (student_id,)
-            ).fetchone()
-        return row
+class EquipmentInput(BaseModel):
+    """
+    fields a user sends when for creating and updating
 
-    @staticmethod
-    def update_student(student_id, student_input, database_connection):
-        with database_connection() as connection:
-            cursor = connection.execute(
-                "UPDATE students SET name = ?, age = ? WHERE id = ?",
-                (student_input.name, student_input.age, student_id),
-            )
-            row = connection.execute(
-                "SELECT id, name, age FROM students WHERE id = ?", (student_id,)
-            ).fetchone()
-        return row
+    """
 
-    @staticmethod
-    def delete_student(student_id, database_connection):
-        with database_connection() as connection:
-            cursor = connection.execute(
-                "DELETE FROM students WHERE id = ?", (student_id,)
-            )
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    name: str = Field(min_length=1, max_length=100)
 
-class Student(StudentInput):
-    """A student record returned by the API."""
+    category_id: int = Field(ge=1)
+
+    description: str | None = Field(default=None, max_length=500)
+    quantity_total: int = Field(ge=1, le=10000)
+
+class Equipment(EquipmentInput):
 
     id: int
+    category_name: str
+    quantity_available: int
