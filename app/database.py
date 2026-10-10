@@ -72,3 +72,36 @@ def initialize_database() -> None:
             )
             """
         )
+
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS loans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                borrower_id INTEGER NOT NULL
+                    REFERENCES borrowers(id) ON DELETE RESTRICT,
+                borrowed_date TEXT NOT NULL,
+                due_date TEXT NOT NULL,
+                returned_date TEXT,
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'returned')),
+                penalty_amount INTEGER NOT NULL DEFAULT 0
+                    CHECK (penalty_amount >= 0),
+                notes TEXT,
+                CHECK (due_date >= borrowed_date)
+            )
+            """
+        )
+        
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS loan_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                loan_id INTEGER NOT NULL
+                    REFERENCES loans(id) ON DELETE CASCADE,
+                equipment_id INTEGER NOT NULL
+                    REFERENCES equipment(id) ON DELETE RESTRICT,
+                quantity INTEGER NOT NULL CHECK (quantity >= 1),
+                UNIQUE (loan_id, equipment_id)
+            )
+            """
+        )

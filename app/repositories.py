@@ -1,9 +1,11 @@
 import sqlite3
-from app.exceptions import ConflictError, NotFoundError
+from app.exceptions import ConflictError, NotFoundError, InsufficientStockError
+
+# this file covers a lot of OOP
+
 
 class BaseRepository:
     """Shared CRUD logic. Subclasses only describe their own table."""
-
 
     table: str  
     label: str 
@@ -12,10 +14,7 @@ class BaseRepository:
 
     id_column: str = "id"
 
-    # __init__ is the CONSTRUCTOR: it runs automatically when you create an
-    # object, e.g. CategoryRepository(connection).
-    # `self` is the object being built. `connection` is the open database
-    # connection passed in by the caller.
+
     def __init__(self, connection: sqlite3.Connection) -> None:
         self.connection = connection
 
@@ -264,3 +263,128 @@ class BorrowerRepository(BaseRepository):
             params.append(borrower_type)
 
         return self._select_page(conditions, params, skip, limit)
+
+class LoanRepository(BaseRepository):
+    table = "loans"
+    label = "Loan"
+    columns = (
+        "borrower_id",
+        "borrowed_date",
+        "due_date",
+        "returned_date",
+        "status",
+        "penalty_amount",
+        "notes",
+    )
+
+    select_sql = (
+        "SELECT l.id, l.borrower_id, b.full_name AS borrower_name, "
+        "b.borrower_type, l.borrowed_date, l.due_date, l.returned_date, "
+        "l.status, l.penalty_amount, l.notes "
+        "FROM loans AS l JOIN borrowers AS b ON b.id = l.borrower_id"
+    )
+    id_column = "l.id"
+
+    def has_overdue(self, borrower_id: int, today: datetime.date) -> bool:
+        """True if this borrower has an active loan whose due date has passed."""
+        # ISO date text can be compared with < and > like normal dates.
+        row = self.connection.execute(
+            "SELECT EXISTS (SELECT 1 FROM loans WHERE borrower_id = ? "
+            "AND status = 'active' AND due_date < ?)",
+            (borrower_id, today.isoformat()),
+        ).fetchone()
+        return bool(row[0])
+ 
+    def add_item(self, loan_id: int, equipment_id: int, quantity: int) -> None:
+        try:
+            self.connection.execute(
+                "INSERT INTO loan_items (loan_id, equipment_id, quantity) "
+                "VALUES (?, ?, ?)",
+                (loan_id, equipment_id, quantity),
+            )
+        except sqlite3.IntegrityError as error:
+            raise self._conflict(error) from error
+ 
+    def get_items(self, loan_id: int) -> list[dict]:
+        # JOIN equipment so each item line also shows the equipment's name.
+        rows = self.connection.execute(
+            "SELECT li.equipment_id, e.name AS equipment_name, li.quantity "
+            "FROM loan_items AS li JOIN equipment AS e ON e.id = li.equipment_id "
+            "WHERE li.loan_id = ? ORDER BY li.id",
+            (loan_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+ 
+    def present(self, loan: dict, today: datetime.date | None = None) -> dict:
+        """Turn a stored loan row into what the API shows.
+ 
+        Adds the item lines, works out days_overdue, and replaces the stored
+        status 'active' with 'overdue' when the due date has passed.
+        """
+        # `today or datetime.date.today()` = use the given date, else the real one.
+        today = today or datetime.date.today()
+        # fromisoformat turns the stored text "2026-10-11" back into a date.
+        due = datetime.date.fromisoformat(loan["due_date"])
+ 
+        if loan["status"] == "returned":
+            returned = datetime.date.fromisoformat(loan["returned_date"])
+            status = "returned"
+            # max(0, ...) so an early return never gives a negative number.
+            days_overdue = max(0, (returned - due).days)
+        else:
+            days_overdue = max(0, (today - due).days)
+            status = "overdue" if days_overdue > 0 else "active"
+ 
+        # {**loan, ...} copies the row and replaces/adds the listed keys.
+        return {
+            **loan,
+            "status": status,
+            "days_overdue": days_overdue,
+            "items": self.get_items(loan["id"]),
+        }
+ 
+    def get_detail(self, loan_id: int, today: datetime.date | None = None) -> dict:
+        # get() raises NotFoundError (-> 404) when the loan does not exist.
+        return self.present(self.get(loan_id), today)
+ 
+    def search(
+        self,
+        q: str | None = None,
+        borrower_id: int | None = None,
+        status: str | None = None,
+        skip: int = 0,
+        limit: int = 10,
+        today: datetime.date | None = None,
+    ) -> list[dict]:
+        today = today or datetime.date.today()
+        conditions: list[str] = []
+        params: list = []
+ 
+        # Text search in the borrower's name or id number (both come from the
+        # JOINed borrowers table, which has the nickname b).
+        if q is not None:
+            pattern = self._like_pattern(q)
+            conditions.append(
+                "(b.full_name LIKE ? ESCAPE '\\' OR b.id_number LIKE ? ESCAPE '\\')"
+            )
+            params += [pattern, pattern]
+ 
+        # Only the loans of one borrower.
+        if borrower_id is not None:
+            conditions.append("l.borrower_id = ?")
+            params.append(borrower_id)
+ 
+        # The status filter. "overdue" and "active" are not stored, so we build
+        # them from the stored status plus the due date.
+        if status == "returned":
+            conditions.append("l.status = 'returned'")
+        elif status == "active":
+            conditions.append("l.status = 'active' AND l.due_date >= ?")
+            params.append(today.isoformat())
+        elif status == "overdue":
+            conditions.append("l.status = 'active' AND l.due_date < ?")
+            params.append(today.isoformat())
+ 
+        rows = self._select_page(conditions, params, skip, limit)
+        # Add items / days_overdue / the real status to each loan.
+        return [self.present(row, today) for row in rows]
