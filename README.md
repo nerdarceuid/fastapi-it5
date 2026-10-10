@@ -1,11 +1,8 @@
 # Lab Equipment Borrowing API
 
-A REST API built with **FastAPI** and **SQLite** that replaces a paper logbook in a school laboratory. It keeps track of equipment stock, registers borrowers (students and faculty), and handles borrowing and returning: stock goes down when equipment is borrowed, goes back up when it is returned, and late returns are charged a penalty.
+A REST API built with **FastAPI** and **SQLite**
 
-**Author:** _your name_  
-**Course:** _course name_
 
-The full description of the system (purpose, scope, and endpoint table) is in the project documentation (.docx). This file explains how to install, run, and test the application.
 
 ---
 
@@ -13,7 +10,6 @@ The full description of the system (purpose, scope, and endpoint table) is in th
 
 - Python **3.10 or newer** (check with `python --version`, or `py --version` on Windows)
 - Git
-- An internet connection (to download the packages)
 
 No database server is needed: SQLite is built into Python.
 
@@ -64,11 +60,15 @@ When it works, your prompt starts with `(.venv)`.
 ```bash
 python -m pip install -r requirements.txt
 ```
+or
+```bash
+uv pip install -r requirements.txt
+```
 
 ### 2.4 Run the application
 
 ```bash
-python -m uvicorn main:app --reload
+uvicorn main:app --reload
 ```
 
 You should see a line like `Uvicorn running on http://127.0.0.1:8000`. The `--reload` option restarts the server automatically when a file changes. Press `Ctrl+C` to stop it.
