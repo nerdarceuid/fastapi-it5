@@ -124,7 +124,7 @@ Do the tests **in order, starting from an empty database** (see 2.6). Part A is 
 
 #### A1. Home
 
-`GET /` returns `{"message": "Welcome! Visit /docs to try the API."}`
+`GET /` returns `{"message": "The API is working look at docs"}`
 
 #### A2. Categories
 
