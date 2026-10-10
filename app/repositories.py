@@ -1,82 +1,86 @@
-"""
-repository job is to talk to one table in the database. the rest of the application never writes SQL
-just calling CategoryRepository(connection).create({...})
-"""
-
 import sqlite3
 from app.exceptions import ConflictError, NotFoundError
 
 class BaseRepository:
+    """Shared CRUD logic. Subclasses only describe their own table."""
 
-    table: str
-    label: str
-    columns: tuple[str, ...]
 
+    table: str  
+    label: str 
+    columns: tuple[str, ...] 
+    select_sql: str  
+
+    id_column: str = "id"
+
+    # __init__ is the CONSTRUCTOR: it runs automatically when you create an
+    # object, e.g. CategoryRepository(connection).
+    # `self` is the object being built. `connection` is the open database
+    # connection passed in by the caller.
     def __init__(self, connection: sqlite3.Connection) -> None:
         self.connection = connection
-    
-    #reading
+
     def list_all(self) -> list[dict]:
 
-            rows = self.connection.execute(
-                f"{self.select_sql} ORDER BY {self.id_column}"
-            ).fetchall() #collects all matching rows into a list
+        rows = self.connection.execute(
+            f"{self.select_sql} ORDER BY {self.id_column}"
+        ).fetchall()  
 
-            #then into dictionary
-            return [dict(row) for row in rows]
+        return [dict(row) for row in rows]
 
-    def find(self, row_id: int) -> dict| None:
-        #basically returns a record or none if does not exists
+    def find(self, row_id: int) -> dict | None:
+        """Return the record, or None if it does not exist."""
+
         row = self.connection.execute(
-            f"{self.select_sql} WHERE {self.id_column} = ?" (row_id,)
-        ).fetchone()
+            f"{self.select_sql} WHERE {self.id_column} = ?", (row_id,)
+        ).fetchone() 
 
         return dict(row) if row else None
 
     def get(self, row_id: int) -> dict:
-        #returns the record or raise NotFoundError
+        """Return the record, or raise NotFoundError."""
 
         record = self.find(row_id)
 
         if record is None:
+
             raise NotFoundError(f"{self.label} {row_id} not found")
-        
         return record
 
-    #writing
+    # -- writing -------------------------------------------------------------
     def create(self, data: dict) -> dict:
+        
         columns = self._writable_columns(data)
 
         placeholders = ", ".join("?" for _ in columns)
 
         try:
+            
             cursor = self.connection.execute(
-            f"INSERT INTO {self.table} ({', '.join(columns)}) "
-            f"VALUES ({placeholders})",
-            # The values, in the SAME order as the columns.
-            [data[column] for column in columns],
+                f"INSERT INTO {self.table} ({', '.join(columns)}) "
+                f"VALUES ({placeholders})",
+    
+                [data[column] for column in columns],
             )
-        #checking if integrity error is violated
         except sqlite3.IntegrityError as error:
+
             raise self._conflict(error) from error
-        
+
         return self.get(cursor.lastrowid)
 
     def update(self, row_id: int, data: dict) -> dict:
         columns = self._writable_columns(data)
 
-        #depending on what assignments are called later
         assignments = ", ".join(f"{column} = ?" for column in columns)
-
         try:
             cursor = self.connection.execute(
+
                 f"UPDATE {self.table} SET {assignments} WHERE id = ?",
+
                 [data[column] for column in columns] + [row_id],
             )
         except sqlite3.IntegrityError as error:
             raise self._conflict(error) from error
 
-        #if zero means no row -> nothing to update
         if cursor.rowcount == 0:
             raise NotFoundError(f"{self.label} {row_id} not found")
         return self.get(row_id)
@@ -84,9 +88,10 @@ class BaseRepository:
     def delete(self, row_id: int) -> None:
         try:
             cursor = self.connection.execute(
-            f"DELETE FROM {self.table} WHERE id = ?", (row_id,)
+                f"DELETE FROM {self.table} WHERE id = ?", (row_id,)
             )
         except sqlite3.IntegrityError as error:
+
             raise ConflictError(
                 f"{self.label} {row_id} is still used by other records "
                 "and cannot be deleted"
@@ -94,30 +99,60 @@ class BaseRepository:
 
         if cursor.rowcount == 0:
             raise NotFoundError(f"{self.label} {row_id} not found")
-        
-    def _writable_columns(self, data: dict) -> list[str]:
-        unknown = set(data) - set(self.columns)
 
+    def _writable_columns(self, data: dict) -> list[str]:
+
+        unknown = set(data) - set(self.columns)
         if unknown:
             raise ValueError(f"Unknown column(s) for {self.table}: {unknown}")
+
         return list(data)
 
+    @staticmethod
+    def _like_pattern(text: str) -> str:
+
+        escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+        return f"%{escaped}%"
+
+    def _select_page(
+        self, conditions: list[str], params: list, skip: int, limit: int
+    ) -> list[dict]:
+        """Run the table's SELECT with optional filters and paging.
+
+        conditions: pieces of a WHERE clause, e.g. ["e.category_id = ?"]
+        params:     the values for the ? placeholders in those conditions
+        skip/limit: pagination (skip this many rows, return at most `limit`)
+        """
+        sql = self.select_sql
+
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+
+        sql += f" ORDER BY {self.id_column} LIMIT ? OFFSET ?"
+
+        rows = self.connection.execute(sql, [*params, limit, skip]).fetchall()
+        return [dict(row) for row in rows]
+
     def _conflict(self, error: sqlite3.IntegrityError) -> ConflictError:
-        #this RETURNS the error object; the caller does the `raise`.
-        if "UNIQUE" in str(error):
-            return ConflictError(f"A {self.label.lower()} with this name already exists")
+
+        message = str(error)
+        if "UNIQUE" in message:
+
+            column = message.split(".")[-1].replace("_", " ")
+            return ConflictError(
+                f"A {self.label.lower()} with this {column} already exists"
+            )
         return ConflictError(f"{self.label} conflicts with existing data: {error}")
 
-#baserepo + whatever I add
-#basically it has all the crud with find, all it has to do is fill in
-#the blanks
+
 class CategoryRepository(BaseRepository):
     table = "categories"
     label = "Category"
     columns = ("name", "description")
     select_sql = "SELECT id, name, description FROM categories"
 
-#same thing with this class
+
 class EquipmentRepository(BaseRepository):
     table = "equipment"
     label = "Equipment"
@@ -137,21 +172,25 @@ class EquipmentRepository(BaseRepository):
 
     id_column = "e.id"
 
+
     def __init__(self, connection: sqlite3.Connection) -> None:
+
         super().__init__(connection)
-        # equipment has a category, used to check that a category exists
+
         self.categories = CategoryRepository(connection)
 
-            # OVERRIDING: this method has the same name as the parent's, so Python uses
-    # THIS one for equipment. It adds rules, then calls the parent's version.
 
-        def create(self, data: dict) -> dict:
-            self.categories.get(data["category_id"])
-            return super().create({**data, "quantity_available": data["quantity_total"]})
+    def create(self, data: dict) -> dict:
+        self.categories.get(data["category_id"])
 
-        def update(self, row_id: int, data: dict) -> dict:
-            current = self.get(row_id)
-            self.categories.get(data["category_id"])
+        return super().create({**data, "quantity_available": data["quantity_total"]})
+
+    def update(self, row_id: int, data: dict) -> dict:
+
+        current = self.get(row_id)
+
+        self.categories.get(data["category_id"])
+
 
         borrowed = current["quantity_total"] - current["quantity_available"]
         if data["quantity_total"] < borrowed:
@@ -159,7 +198,69 @@ class EquipmentRepository(BaseRepository):
                 f"{borrowed} unit(s) are currently borrowed, so quantity_total "
                 f"cannot be lower than {borrowed}"
             )
+
         return super().update(
             row_id,
             {**data, "quantity_available": data["quantity_total"] - borrowed},
         )
+
+    def search(
+        self,
+        q: str | None = None,
+        category_id: int | None = None,
+        available_only: bool = False,
+        skip: int = 0,
+        limit: int = 10,
+    ) -> list[dict]:
+
+        conditions: list[str] = []
+        params: list = []
+
+        if q is not None:
+            pattern = self._like_pattern(q)
+            conditions.append(
+                "(e.name LIKE ? ESCAPE '\\' OR e.description LIKE ? ESCAPE '\\')"
+            )
+            params += [pattern, pattern]
+
+        if category_id is not None:
+            conditions.append("e.category_id = ?")
+            params.append(category_id)
+
+        if available_only:
+            conditions.append("e.quantity_available > 0")
+
+        return self._select_page(conditions, params, skip, limit)
+
+class BorrowerRepository(BaseRepository):
+    table = "borrowers"
+    label = "Borrower"
+    columns = ("full_name", "borrower_type", "id_number", "contact")
+    select_sql = (
+        "SELECT id, full_name, borrower_type, id_number, contact FROM borrowers"
+    )
+
+    def search(
+        self,
+        q: str | None = None,
+        borrower_type: str | None = None,
+        skip: int = 0,
+        limit: int = 10,
+    ) -> list[dict]:
+        conditions: list[str] = []
+        params: list = []
+
+
+        if q is not None:
+            pattern = self._like_pattern(q)
+            conditions.append(
+                "(full_name LIKE ? ESCAPE '\\' OR id_number LIKE ? ESCAPE '\\')"
+            )
+            params += [pattern, pattern]
+
+        # Only students, or only faculty.
+        if borrower_type is not None:
+            conditions.append("borrower_type = ?")
+            params.append(borrower_type)
+
+        return self._select_page(conditions, params, skip, limit)
