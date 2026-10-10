@@ -4,7 +4,7 @@ from app.database import initialize_database
 from app.exceptions import ConflictError, NotFoundError
 from app.routers import borrowers, categories, equipment
 from app.routers import borrowers, categories, equipment, loans
-app = FastAPI(title="Lab Equipment Borrowing API")
+app = FastAPI(title="Lab Equipment Borrowing API", version="battlerv1")
 
 app.include_router(categories.router)
 app.include_router(equipment.router)
